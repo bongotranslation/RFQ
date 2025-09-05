@@ -96,9 +96,6 @@ def analyze_pdf_basic(pdf_path: str) -> Dict[str, Any]:
         return {
             "pages_total": doc.page_count,
             "by_page": by_page,
-            "words_total": sum(p["words"] for p in by_page),
-            "words_by_language": dict(total_words_by_language),
-            "images_total": sum(p["images"] for p in by_page),
             "thresholds": {
                 "min_img_area_frac": MIN_IMG_AREA_FRAC,
                 "needs_ocr_words_thr": analysis_config.NEEDS_OCR_WORDS_THR,
@@ -156,18 +153,8 @@ def update_pdf_stats_with_ocr(pdf_stats: Dict[str, Any], ocr_results: List[Dict[
             
         updated_by_page.append(updated_page)
     
-    # Пересчитываем totals
+    # Обновляем статистику
     updated_stats = pdf_stats.copy()
     updated_stats["by_page"] = updated_by_page
-    updated_stats["words_total"] = sum(p["words"] for p in updated_by_page)
-    
-    # Пересчитываем общую статистику по языкам
-    total_words_by_language = defaultdict(int)
-    
-    for page in updated_by_page:
-        for lang, count in page.get("words_by_language", {}).items():
-            total_words_by_language[lang] += count
-    
-    updated_stats["words_by_language"] = dict(total_words_by_language)
     
     return updated_stats

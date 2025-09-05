@@ -153,13 +153,24 @@ def analyze(req: AnalyzeRequest):
     if ocr_pages and not any("error" in page for page in ocr_pages):
         pdf_stats = update_pdf_stats_with_ocr(pdf_stats, ocr_pages)
 
-    # 5) краткая сводка
+    # 5) краткая сводка - вычисляем из данных по страницам
+    by_page = pdf_stats.get("by_page", [])
+    words_total = sum(p.get("words", 0) for p in by_page)
+    images_total = sum(p.get("images", 0) for p in by_page)
+    
+    # Агрегация слов по языкам
+    from collections import defaultdict
+    words_by_language = defaultdict(int)
+    for page in by_page:
+        for lang, count in page.get("words_by_language", {}).items():
+            words_by_language[lang] += count
+    
     summary = {
         "pages_total": pdf_stats.get("pages_total", 0),
-        "images_total": pdf_stats.get("images_total", 0),
-        "pages_ocr_applied": sum(1 for p in pdf_stats.get("by_page", []) if p.get("ocr_applied")),
-        "words_total": pdf_stats.get("words_total", 0),
-        "words_by_language": pdf_stats.get("words_by_language", {})
+        "images_total": images_total,
+        "pages_ocr_applied": sum(1 for p in by_page if p.get("ocr_applied")),
+        "words_total": words_total,
+        "words_by_language": dict(words_by_language)
     }
 
     # 6) формируем результат

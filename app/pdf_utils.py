@@ -78,3 +78,45 @@ def analyze_pdf_basic(pdf_path: str) -> Dict[str, Any]:
         }
     finally:
         doc.close()
+
+def update_pdf_stats_with_ocr(pdf_stats: Dict[str, Any], ocr_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Обновляет статистику PDF с учетом результатов OCR.
+    Добавляет OCR слова к исходным словам страниц и пересчитывает totals.
+    """
+    if not ocr_results or not pdf_stats.get("by_page"):
+        return pdf_stats
+    
+    # Создаем словарь OCR результатов по номерам страниц
+    ocr_by_page = {}
+    for ocr_result in ocr_results:
+        if isinstance(ocr_result, dict) and "p" in ocr_result:
+            page_num = ocr_result["p"]
+            ocr_words = ocr_result.get("ocr_words", 0)  # новое поле с количеством слов
+            ocr_by_page[page_num] = ocr_words
+    
+    # Обновляем статистику страниц
+    updated_by_page = []
+    for page_info in pdf_stats["by_page"]:
+        page_num = page_info["p"]
+        original_words = page_info["words"]
+        ocr_words = ocr_by_page.get(page_num, 0)
+        
+        updated_page = page_info.copy()
+        updated_page["words"] = original_words + ocr_words
+        updated_page["ocr_words"] = ocr_words
+        updated_page["ocr_applied"] = ocr_words > 0
+        
+        # Обновляем needs_ocr - если OCR уже применен, то больше не нужен
+        if ocr_words > 0:
+            updated_page["needs_ocr"] = False
+            
+        updated_by_page.append(updated_page)
+    
+    # Пересчитываем totals
+    updated_stats = pdf_stats.copy()
+    updated_stats["by_page"] = updated_by_page
+    updated_stats["words_total"] = sum(p["words"] for p in updated_by_page)
+    updated_stats["ocr_words_total"] = sum(p.get("ocr_words", 0) for p in updated_by_page)
+    
+    return updated_stats

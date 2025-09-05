@@ -11,6 +11,7 @@ from app.config import settings
 from app import storage
 from app import utils
 from app import pdf_utils
+from app.pdf_utils import update_pdf_stats_with_ocr
 from typing import Optional, Dict, Any, List
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -118,34 +119,49 @@ def analyze(req: AnalyzeRequest):
             q = analysis_config.OCR_JPEG_QUALITY
             doc = fitz.open(pdf_path)
             try:
-                for pinfo in pdf_stats.get("by_page", []):
+                pages_to_process = [p for p in pdf_stats.get("by_page", []) if req.force_ocr or p.get("needs_ocr")]
+                total_pages = len(pages_to_process)
+                print(f"OCR: Начинаю обработку {total_pages} страниц...")
+                
+                for idx, pinfo in enumerate(pages_to_process, 1):
                     pnum = pinfo["p"] - 1
-                    if req.force_ocr or pinfo.get("needs_ocr"):
-                        page = doc.load_page(pnum)
-                        scale = dpi / 72.0
-                        mat = fitz.Matrix(scale, scale)
-                        pix = page.get_pixmap(matrix=mat, alpha=False)
-                        img_bytes = pix.tobytes("jpg", quality=q)
+                    print(f"OCR: Обработка страницы {pinfo['p']} ({idx}/{total_pages})...")
+                    
+                    page = doc.load_page(pnum)
+                    scale = dpi / 72.0
+                    mat = fitz.Matrix(scale, scale)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+                    img_bytes = pix.tobytes("jpeg")
 
-                        ocr = ocr_vision.ocr_image_bytes(img_bytes)
-                        ocr_pages.append({
-                            "p": pinfo["p"],
-                            "ocr_text_len": ocr["text_len"],
-                            "sample": (ocr["text"][:120] + "...") if ocr["text_len"] > 120 else ocr["text"],
-                        })
+                    ocr = ocr_image_bytes(img_bytes)
+                    ocr_pages.append({
+                        "p": pinfo["p"],
+                        "ocr_text_len": ocr["text_len"],
+                        "ocr_words": ocr["words"],
+                        "sample": (ocr["text"][:120] + "...") if ocr["text_len"] > 120 else ocr["text"],
+                    })
+                
+                print(f"OCR: Завершена обработка всех {total_pages} страниц.")
+                
             finally:
                 doc.close()
     except Exception as e:
         ocr_pages = [{"error": str(e)}]
 
+    # 4.2) Обновляем PDF статистику с учетом OCR результатов
+    if ocr_pages and not any("error" in page for page in ocr_pages):
+        pdf_stats = update_pdf_stats_with_ocr(pdf_stats, ocr_pages)
+
     # 5) краткая сводка
     summary = {
         "pages_total": pdf_stats.get("pages_total", 0),
         "words_total": pdf_stats.get("words_total", 0),
+        "ocr_words_total": pdf_stats.get("ocr_words_total", 0),
         "images_total": pdf_stats.get("images_total", 0),
         "large_images_total": pdf_stats.get("large_images_total", 0),
         "pages_needing_ocr": sum(1 for p in pdf_stats.get("by_page", []) if p.get("needs_ocr")),
         "pages_ocr_done": sum(1 for p in ocr_pages if isinstance(p, dict) and "p" in p),
+        "pages_ocr_applied": sum(1 for p in pdf_stats.get("by_page", []) if p.get("ocr_applied")),
     }
 
     # 6) формируем результат
@@ -164,7 +180,11 @@ def analyze(req: AnalyzeRequest):
     # 7) сохраняем JSON в RESULTS_BUCKET
     try:
         base_name = os.path.basename(req.name)
-        out_name = f"analysis/{base_name}.analysis.json"
+        # Добавляем timestamp для уникальности
+        import time
+        timestamp = int(time.time())
+        ocr_suffix = "_ocr_test" if req.force_ocr else ""
+        out_name = f"analysis/{base_name}.{timestamp}{ocr_suffix}.analysis.json"
         results_uri = storage.upload_json(settings.RESULTS_BUCKET, out_name, result)
     except Exception:
         results_uri = None

@@ -138,6 +138,7 @@ def analyze(req: AnalyzeRequest):
                         "p": pinfo["p"],
                         "ocr_text_len": ocr["text_len"],
                         "ocr_words": ocr["words"],
+                        "ocr_words_by_language": ocr["words_by_language"],
                         "sample": (ocr["text"][:120] + "...") if ocr["text_len"] > 120 else ocr["text"],
                     })
                 
@@ -155,12 +156,10 @@ def analyze(req: AnalyzeRequest):
     # 5) краткая сводка
     summary = {
         "pages_total": pdf_stats.get("pages_total", 0),
-        "words_total": pdf_stats.get("words_total", 0),
-        "ocr_words_total": pdf_stats.get("ocr_words_total", 0),
         "images_total": pdf_stats.get("images_total", 0),
-        "pages_needing_ocr": sum(1 for p in pdf_stats.get("by_page", []) if p.get("needs_ocr")),
-        "pages_ocr_done": sum(1 for p in ocr_pages if isinstance(p, dict) and "p" in p),
         "pages_ocr_applied": sum(1 for p in pdf_stats.get("by_page", []) if p.get("ocr_applied")),
+        "words_total": pdf_stats.get("words_total", 0),
+        "words_by_language": pdf_stats.get("words_by_language", {})
     }
 
     # 6) формируем результат

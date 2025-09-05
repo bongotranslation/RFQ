@@ -26,7 +26,6 @@ class AnalysisConfig:
     OCR_MAX_SIDE_PX: int
     OCR_JPEG_QUALITY: int
     MIN_IMG_AREA_FRAC: float
-    LARGE_IMG_AREA_FRAC: float
     NEEDS_OCR_WORDS_THR: int
     BATCH_MAX: int
     BATCH_WORKERS: int
@@ -39,7 +38,6 @@ class AnalysisConfig:
         self.OCR_MAX_SIDE_PX = _get_int("OCR_MAX_SIDE_PX", 2500)
         self.OCR_JPEG_QUALITY = _get_int("OCR_JPEG_QUALITY", 80)
         self.MIN_IMG_AREA_FRAC = _get_float("MIN_IMG_AREA_FRAC", 0.002)
-        self.LARGE_IMG_AREA_FRAC = _get_float("LARGE_IMG_AREA_FRAC", 0.5)
         self.NEEDS_OCR_WORDS_THR = _get_int("NEEDS_OCR_WORDS_THR", 5)
                 # batch settings
         self.BATCH_MAX = _get_int("BATCH_MAX", 50)          # максимум объектов в одном batch

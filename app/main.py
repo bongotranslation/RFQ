@@ -158,7 +158,6 @@ def analyze(req: AnalyzeRequest):
         "words_total": pdf_stats.get("words_total", 0),
         "ocr_words_total": pdf_stats.get("ocr_words_total", 0),
         "images_total": pdf_stats.get("images_total", 0),
-        "large_images_total": pdf_stats.get("large_images_total", 0),
         "pages_needing_ocr": sum(1 for p in pdf_stats.get("by_page", []) if p.get("needs_ocr")),
         "pages_ocr_done": sum(1 for p in ocr_pages if isinstance(p, dict) and "p" in p),
         "pages_ocr_applied": sum(1 for p in pdf_stats.get("by_page", []) if p.get("ocr_applied")),
@@ -166,15 +165,8 @@ def analyze(req: AnalyzeRequest):
 
     # 6) формируем результат
     result = {
-        "input": req.model_dump(),
-        "gcs_object": obj_meta,
-        "local": {"path": local_path, "size_bytes": size},
-        "conversion": {"performed": bool(converted_pdf_path), "pdf_path": converted_pdf_path},
         "pdf": pdf_stats,
-        "ocr": {"pages": ocr_pages},
         "summary": summary,
-        "service": {"project_id": settings.PROJECT_ID, "region": settings.REGION},
-        "status": "analyzed"
     }
 
     # 7) сохраняем JSON в RESULTS_BUCKET

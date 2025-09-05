@@ -2,6 +2,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 import os
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
 from app.config import settings
 from app import storage

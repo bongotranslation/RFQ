@@ -13,6 +13,19 @@ def ensure_tmp_dir() -> str:
 def is_pdf(path: str) -> bool:
     return pathlib.Path(path).suffix.lower() == ".pdf"
 
+def is_docx(path: str) -> bool:
+    return pathlib.Path(path).suffix.lower() == ".docx"
+
+def get_file_type(path: str) -> str:
+    """Возвращает тип файла: 'pdf', 'docx' или 'other'"""
+    ext = pathlib.Path(path).suffix.lower()
+    if ext == ".pdf":
+        return "pdf"
+    elif ext == ".docx":
+        return "docx"
+    else:
+        return "other"
+
 def soffice_convert_to_pdf(input_path: str) -> str:
     """
     Конвертирует файл (docx/pptx/xlsx/...) в PDF с помощью LibreOffice (soffice --headless).

@@ -1,0 +1,211 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any
+import os
+
+from app.config import settings
+from app import storage
+from app import utils
+from app import pdf_utils
+from typing import Optional, Dict, Any, List
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from app.analysis_config import analysis_config
+
+import io
+from app import pdf_utils
+from app.ocr_vision import ocr_image_bytes
+from app.analysis_config import analysis_config 
+
+
+app = FastAPI(title="doc-analyzer")
+
+
+class AnalyzeRequest(BaseModel):
+    bucket: str = Field(..., description="GCS bucket name, e.g. my-bucket")
+    name: str = Field(..., description="Object path inside the bucket")
+    contentType: Optional[str] = Field(None, description="GCS object content type (MIME)")
+    force_ocr: bool = False
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Optional extra metadata")
+class BatchRequest(BaseModel):
+    bucket: str
+    objects: List[str]  # список имён объектов в бакете (keys)
+class BatchRequest(BaseModel):
+    bucket: str
+    objects: List[str]
+    mode: str = "summary"  # "summary" | "full"
+class BatchPrefixRequest(BaseModel):
+    bucket: str
+    prefix: str = ""
+    limit: int = 50          # максимум объектов, которые заберём
+    mode: str = "summary"    # "summary" | "full"
+
+@app.post("/batch_analyze_prefix")
+def batch_analyze_prefix(req: BatchPrefixRequest):
+    # 1) листим объекты по префиксу
+    try:
+        all_names = storage.list_objects(req.bucket, req.prefix, max_items=max(1, req.limit))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GCS list error: {e}")
+
+    # 2) ограничим по BATCH_MAX (глобальный лимит)
+    maxn = analysis_config.BATCH_MAX
+    names = all_names[:maxn] if len(all_names) > maxn else all_names
+
+    # 3) переиспользуем существующий батч
+    br = BatchRequest(bucket=req.bucket, objects=names, mode=req.mode)
+    return batch_analyze(br)
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/analyze")
+def analyze(req: AnalyzeRequest):
+    if not req.bucket or not req.name:
+        raise HTTPException(status_code=400, detail="bucket and name are required")
+
+    # 1) head объекта
+    try:
+        obj_meta = storage.head_object(req.bucket, req.name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GCS head error: {e}")
+
+    # 2) download → /tmp
+    try:
+        local_path, size = storage.download_to_tmp(req.bucket, req.name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GCS download error: {e}")
+
+    # 3) нужно ли конвертировать?
+    content_type = req.contentType or (obj_meta.get("content_type") or "")
+    ext = os.path.splitext(local_path)[1].lower()
+    needs_conversion = (ext != ".pdf") and (not content_type.startswith("application/pdf"))
+
+    converted_pdf_path = None
+    pdf_path = None
+    if needs_conversion:
+        try:
+            converted_pdf_path = utils.soffice_convert_to_pdf(local_path)
+            pdf_path = converted_pdf_path
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Convert to PDF error: {e}")
+    else:
+        pdf_path = local_path  # уже PDF
+
+    # 4) анализ PDF
+    try:
+        pdf_stats = pdf_utils.analyze_pdf_basic(pdf_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF analyze error: {e}")
+
+    # 4.1 OCR нужных страниц
+    ocr_pages = []
+    try:
+        do_ocr = analysis_config.ENABLE_OCR and (
+            req.force_ocr or any(p.get("needs_ocr") for p in pdf_stats.get("by_page", []))
+        )
+        if do_ocr:
+            import fitz  # PyMuPDF
+            dpi = analysis_config.OCR_DPI
+            q = analysis_config.OCR_JPEG_QUALITY
+            doc = fitz.open(pdf_path)
+            try:
+                for pinfo in pdf_stats.get("by_page", []):
+                    pnum = pinfo["p"] - 1
+                    if req.force_ocr or pinfo.get("needs_ocr"):
+                        page = doc.load_page(pnum)
+                        scale = dpi / 72.0
+                        mat = fitz.Matrix(scale, scale)
+                        pix = page.get_pixmap(matrix=mat, alpha=False)
+                        img_bytes = pix.tobytes("jpg", quality=q)
+
+                        ocr = ocr_vision.ocr_image_bytes(img_bytes)
+                        ocr_pages.append({
+                            "p": pinfo["p"],
+                            "ocr_text_len": ocr["text_len"],
+                            "sample": (ocr["text"][:120] + "...") if ocr["text_len"] > 120 else ocr["text"],
+                        })
+            finally:
+                doc.close()
+    except Exception as e:
+        ocr_pages = [{"error": str(e)}]
+
+    # 5) краткая сводка
+    summary = {
+        "pages_total": pdf_stats.get("pages_total", 0),
+        "words_total": pdf_stats.get("words_total", 0),
+        "images_total": pdf_stats.get("images_total", 0),
+        "large_images_total": pdf_stats.get("large_images_total", 0),
+        "pages_needing_ocr": sum(1 for p in pdf_stats.get("by_page", []) if p.get("needs_ocr")),
+        "pages_ocr_done": sum(1 for p in ocr_pages if isinstance(p, dict) and "p" in p),
+    }
+
+    # 6) формируем результат
+    result = {
+        "input": req.model_dump(),
+        "gcs_object": obj_meta,
+        "local": {"path": local_path, "size_bytes": size},
+        "conversion": {"performed": bool(converted_pdf_path), "pdf_path": converted_pdf_path},
+        "pdf": pdf_stats,
+        "ocr": {"pages": ocr_pages},
+        "summary": summary,
+        "service": {"project_id": settings.PROJECT_ID, "region": settings.REGION},
+        "status": "analyzed"
+    }
+
+    # 7) сохраняем JSON в RESULTS_BUCKET
+    try:
+        base_name = os.path.basename(req.name)
+        out_name = f"analysis/{base_name}.analysis.json"
+        results_uri = storage.upload_json(settings.RESULTS_BUCKET, out_name, result)
+    except Exception:
+        results_uri = None
+
+    result["results_uri"] = results_uri
+    return result
+
+@app.post("/batch_analyze")
+def batch_analyze(req: BatchRequest):
+    # 0) лимит
+    maxn = analysis_config.BATCH_MAX
+    if len(req.objects) > maxn:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many objects in batch: {len(req.objects)} > {maxn}. "
+                   f"Split your request or increase BATCH_MAX env."
+        )
+
+    results = []
+
+    def _process(name: str):
+        try:
+            single = analyze(AnalyzeRequest(bucket=req.bucket, name=name))
+            if req.mode == "full":
+                return {"name": name, "status": "ok", "result": single}
+            else:
+                return {
+                    "name": name,
+                    "status": "ok",
+                    "summary": single.get("summary"),
+                    "results_uri": single.get("results_uri"),
+                }
+        except Exception as e:
+            return {"name": name, "status": "error", "error": str(e)}
+
+    workers = max(1, analysis_config.BATCH_WORKERS)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_process, name): name for name in req.objects}
+        for fut in as_completed(futs):
+            results.append(fut.result())
+
+    return {
+        "bucket": req.bucket,
+        "count": len(req.objects),
+        "mode": req.mode,
+        "workers": workers,
+        "results": results
+    }

@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+google-cloud-storage
+pymupdf
+google-cloud-vision

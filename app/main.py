@@ -55,6 +55,9 @@ def health():
 
 @app.post("/analyze")
 def analyze(req: AnalyzeRequest):
+    import time
+    start_time = time.time()
+    
     if not req.bucket or not req.name:
         raise HTTPException(status_code=400, detail="bucket and name are required")
 
@@ -184,13 +187,18 @@ def analyze(req: AnalyzeRequest):
         for lang, count in page.get("words_by_language", {}).items():
             words_by_language[lang] += count
     
+    # Вычисляем время обработки
+    end_time = time.time()
+    processing_time_minutes = round((end_time - start_time) / 60, 2)
+    
     summary = {
         "pages_total": document_stats.get("pages_total", 0),
         "images_total": images_total,
         "pages_ocr_applied": sum(1 for p in by_page if p.get("ocr_applied")),
         "words_total": words_total,
         "words_by_language": dict(words_by_language),
-        "file_type": file_type  # добавляем информацию о типе файла
+        "file_type": file_type,  # добавляем информацию о типе файла
+        "processing_time_minutes": processing_time_minutes  # время обработки в минутах
     }
 
     # 6) формируем результат

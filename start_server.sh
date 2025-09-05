@@ -9,3 +9,4 @@ echo "📚 API документация: http://127.0.0.1:8082/docs"
 echo ""
 
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8082 --reload
+docker-compose up -d
